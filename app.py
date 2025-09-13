@@ -5,6 +5,7 @@ import io
 from PIL import Image
 import fitz  # PyMuPDF for PDF handling
 import os
+from starlette.requests import Request
 
 # Set the port to 5001 as specified in the FastHTML documentation
 port = 5001
@@ -161,15 +162,16 @@ def index():
     )
 
 @rt("/upload", methods=["POST"])
-def upload_file():
+async def upload_file(req: Request):
     try:
         # Get the uploaded file
-        file = request.files.get('file')
+        form = await req.form()
+        file = form.get('file')
         if not file:
             return {"success": False, "error": "No file uploaded"}
         
         # Read file data
-        file_data = file.read()
+        file_data = await file.read()
         filename = file.filename
         
         if not filename:

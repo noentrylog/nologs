@@ -2,3 +2,4 @@ python-fasthtml
 google-genai
 Pillow
 PyMuPDF
+httpx

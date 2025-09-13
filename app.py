@@ -7,6 +7,8 @@ import fitz  # PyMuPDF for PDF handling
 import os
 from starlette.requests import Request
 from starlette.datastructures import UploadFile
+import httpx
+import json
 
 # Set the port to 5001 as specified in the FastHTML documentation
 port = 5001
@@ -17,6 +19,11 @@ os.environ["GOOGLE_API_KEY"] = api_key
 
 # Initialize the Gemini client
 client = genai.Client(api_key=api_key)
+
+# LINE Bot configuration
+LINE_CHANNEL_ACCESS_TOKEN = "XVccgZwoUfD88aXBfeEGNf0Mq0kHii4a/aQP3XTXjwDm2hksTnH1hyelE/DdJdg+tU15+hAnAl13bYpjcdv0Sz2jZYQBmYQofw4ldp2reZ1WoUimsGm4VpnFgPUqMgMF49Us722E0XDIbB/I5lvIxQdB04t89/1O/w1cDnyilFU="
+LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
+LINE_CONTENT_URL = "https://api-data.line.me/v2/bot/message/{messageId}/content"
 
 def extract_text_from_image(image_data):
     """Extract text from image using Gemini Vision API"""
@@ -97,6 +104,71 @@ def process_uploaded_file(file_data, filename):
         return extract_text_from_pdf(file_data)
     else:
         return f"Unsupported file type: {file_extension}. Please upload an image (jpg, png, gif, bmp, webp) or PDF file."
+
+async def download_line_image_content(message_id: str):
+    """Download image content from LINE API"""
+    try:
+        print(f"Downloading image content for message ID: {message_id}")
+        
+        headers = {
+            'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}'
+        }
+        
+        url = LINE_CONTENT_URL.format(messageId=message_id)
+        print(f"LINE Content API Request: {url}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            
+            print(f"LINE Content API Response Status: {response.status_code}")
+            print(f"Content-Type: {response.headers.get('content-type', 'unknown')}")
+            print(f"Content-Length: {len(response.content)} bytes")
+            
+            return {"success": True, "content": response.content}
+            
+    except Exception as e:
+        print(f"Error downloading image content: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+async def reply_to_line_message(reply_token: str, messages: list):
+    """Send a reply message to LINE"""
+    try:
+        print(f"Sending reply with messages: {messages}")
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}'
+        }
+        
+        data = {
+            "replyToken": reply_token,
+            "messages": messages
+        }
+        
+        print(f"LINE API Request:")
+        print(f"  URL: {LINE_REPLY_URL}")
+        print(f"  Headers: {headers}")
+        print(f"  Payload: {json.dumps(data, indent=2)}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                LINE_REPLY_URL,
+                headers=headers,
+                json=data
+            )
+            response.raise_for_status()
+            
+            print(f"LINE API Response:")
+            print(f"  Status Code: {response.status_code}")
+            print(f"  Response Headers: {dict(response.headers)}")
+            print(f"  Response Body: {response.text}")
+            
+            return {"success": True, "status": response.status_code}
+            
+    except Exception as e:
+        print(f"Error sending reply: {str(e)}")
+        return {"success": False, "error": str(e)}
 
 # FastHTML routes
 app, rt = fast_app()
@@ -415,6 +487,122 @@ async def upload_file(req: Request):
         
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+@rt("/webhook", methods=["POST"])
+async def webhook(req: Request):
+    """Handle LINE webhook POST requests"""
+    try:
+        # Get the request body
+        body = await req.json()
+        print(f"Received webhook payload: {json.dumps(body, indent=2)}")
+        
+        # Extract reply token from the webhook data
+        events = body.get('events', [])
+        if not events:
+            print("No events found in webhook")
+            return {"success": False, "error": "No events found in webhook"}
+        
+        event = events[0]
+        reply_token = event.get('replyToken')
+        if not reply_token:
+            print("No reply token found")
+            return {"success": False, "error": "No reply token found"}
+        
+        print(f"Extracted replyToken: {reply_token}")
+        
+        # Check if it's a message event
+        if event.get('type') != 'message':
+            print(f"Event type is not message: {event.get('type')}")
+            return {"success": True, "message": "Non-message event ignored"}
+        
+        message = event.get('message', {})
+        message_type = message.get('type')
+        print(f"Event type: {event.get('type')}")
+        print(f"Message type: {message_type}")
+        
+        # Handle different message types
+        if message_type == 'image':
+            print("Processing image message...")
+            message_id = message.get('id')
+            if not message_id:
+                print("No message ID found for image")
+                return {"success": False, "error": "No message ID found for image"}
+            
+            # Download image content
+            download_result = await download_line_image_content(message_id)
+            if not download_result["success"]:
+                print(f"Failed to download image: {download_result['error']}")
+                messages = [
+                    {
+                        "type": "text",
+                        "text": "Sorry, I couldn't download the image. Please try again."
+                    }
+                ]
+            else:
+                print("Image downloaded successfully, processing with OCR...")
+                # Process image with OCR
+                image_content = download_result["content"]
+                ocr_result = extract_text_from_image(image_content)
+                
+                print(f"OCR Result: {ocr_result}")
+                
+                if "Error" in ocr_result:
+                    messages = [
+                        {
+                            "type": "text",
+                            "text": f"OCR processing failed: {ocr_result}"
+                        }
+                    ]
+                else:
+                    messages = [
+                        {
+                            "type": "text",
+                            "text": "🔍 Here's the text I found in your image:"
+                        },
+                        {
+                            "type": "text",
+                            "text": ocr_result
+                        }
+                    ]
+        
+        elif message_type == 'text':
+            print("Processing text message...")
+            text_content = message.get('text', '')
+            print(f"Text content: {text_content}")
+            
+            messages = [
+                {
+                    "type": "text",
+                    "text": "Hello, user"
+                },
+                {
+                    "type": "text",
+                    "text": "May I help you?"
+                }
+            ]
+        
+        else:
+            print(f"Unsupported message type: {message_type}")
+            messages = [
+                {
+                    "type": "text",
+                    "text": f"I received a {message_type} message, but I can only process text and images."
+                }
+            ]
+        
+        # Send reply message to LINE
+        result = await reply_to_line_message(reply_token, messages)
+        
+        if result["success"]:
+            print("Reply sent successfully!")
+            return {"success": True, "message": "Reply sent successfully"}
+        else:
+            print(f"Failed to send reply: {result['error']}")
+            return {"success": False, "error": result["error"]}
+            
+    except Exception as e:
+        print(f"Webhook processing error: {str(e)}")
+        return {"success": False, "error": f"Webhook processing error: {str(e)}"}
 
 # Run the application
 if __name__ == "__main__":

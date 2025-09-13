@@ -6,6 +6,7 @@ from PIL import Image
 import fitz  # PyMuPDF for PDF handling
 import os
 from starlette.requests import Request
+from starlette.datastructures import UploadFile
 
 # Set the port to 5001 as specified in the FastHTML documentation
 port = 5001
@@ -23,10 +24,29 @@ def extract_text_from_image(image_data):
         # Create the prompt for OCR
         prompt = "Extract all text from this image. Return only the text content, no additional formatting or explanations."
         
-        # Use Gemini to extract text
+        # Convert image data to base64 for proper API format
+        if isinstance(image_data, bytes):
+            image_base64 = base64.b64encode(image_data).decode('utf-8')
+        else:
+            image_base64 = image_data
+        
+        # Use Gemini to extract text with proper content format
         response = client.models.generate_content(
             model='gemini-2.0-flash',
-            contents=[prompt, image_data]
+            contents=[
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": image_base64
+                            }
+                        }
+                    ]
+                }
+            ]
         )
         
         return response.text
@@ -52,8 +72,11 @@ def extract_text_from_pdf(pdf_data):
                 pix = page.get_pixmap()
                 img_data = pix.tobytes("png")
                 
+                # Convert to base64 for Gemini
+                img_base64 = base64.b64encode(img_data).decode('utf-8')
+                
                 # Use Gemini for OCR
-                ocr_text = extract_text_from_image(img_data)
+                ocr_text = extract_text_from_image(img_base64)
                 extracted_text += f"\n--- Page {page_num + 1} (OCR) ---\n{ocr_text}\n"
         
         pdf_document.close()

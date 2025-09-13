@@ -12,7 +12,7 @@ from starlette.datastructures import UploadFile
 port = 5001
 
 # Initialize Gemini API
-api_key = "AIzaSyB-ssyREcxmGX8KnV9JbxfEZLh6xhXC7-k"
+api_key = "AIzaSyDK-0QygkeObRJJI83zllIJo8Ca3J4Vwm4"
 os.environ["GOOGLE_API_KEY"] = api_key
 
 # Initialize the Gemini client

@@ -103,85 +103,293 @@ app, rt = fast_app()
 
 @rt("/")
 def index():
-    return Html(
-        Head(
-            Title("OCR Web Application"),
-            Meta(charset="utf-8"),
-            Meta(name="viewport", content="width=device-width, initial-scale=1"),
-            Link(rel="stylesheet", href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css")
-        ),
-        Body(
+    return Titled("OCR Text Extraction",
+        Container(
+            # Header Section
             Div(
                 Div(
-                    H1("OCR Text Extraction", class_="text-center mb-4"),
-                    P("Upload an image or PDF file to extract text using Google Gemini AI", class_="text-center text-muted mb-4"),
-                    class_="container"
+                    H1("🔍 OCR Text Extraction", cls="text-center mb-3"),
+                    P("Transform your images and PDFs into editable text using advanced AI technology", 
+                      cls="text-center text-muted mb-4 lead"),
+                    class_="text-center"
                 ),
+                cls="mb-5"
+            ),
+            
+            # Main Upload Card
+            Card(
                 Div(
+                    H3("📁 Upload Your File", cls="mb-3"),
+                    P("Supported formats: JPG, PNG, GIF, BMP, WEBP, PDF", cls="text-muted mb-4"),
+                    
                     Form(
                         Div(
-                            Input(type="file", name="file", id="fileInput", class_="form-control", accept=".jpg,.jpeg,.png,.gif,.bmp,.webp,.pdf", required=True),
-                            class_="mb-3"
+                            Label("Choose File", for_="fileInput", cls="form-label fw-bold"),
+                            Input(
+                                type="file", 
+                                name="file", 
+                                id="fileInput", 
+                                cls="form-control form-control-lg", 
+                                accept=".jpg,.jpeg,.png,.gif,.bmp,.webp,.pdf", 
+                                required=True
+                            ),
+                            cls="mb-4"
                         ),
                         Div(
-                            Button("Extract Text", type="submit", class_="btn btn-primary btn-lg"),
-                            class_="text-center"
+                            Button("🚀 Extract Text", type="submit", cls="btn btn-primary btn-lg w-100"),
+                            cls="text-center"
                         ),
                         method="post",
                         action="/upload",
-                        enctype="multipart/form-data"
+                        enctype="multipart/form-data",
+                        cls="needs-validation"
                     ),
-                    class_="container"
+                    cls="p-4"
                 ),
+                cls="shadow-lg border-0 mb-4"
+            ),
+            
+            # Results Section
+            Div(
+                Div(id="result"),
+                cls="mt-4"
+            ),
+            
+            # Features Section
+            Div(
+                H3("✨ Features", cls="text-center mb-4"),
                 Div(
-                    Div(id="result", class_="mt-4"),
-                    class_="container"
+                    Div(
+                        Div(
+                            H4("🖼️ Image OCR", cls="h5"),
+                            P("Extract text from photos, screenshots, and scanned documents"),
+                            cls="text-center p-3"
+                        ),
+                        cls="col-md-4 mb-3"
+                    ),
+                    Div(
+                        Div(
+                            H4("📄 PDF Processing", cls="h5"),
+                            P("Handle both text-based and image-based PDF files"),
+                            cls="text-center p-3"
+                        ),
+                        cls="col-md-4 mb-3"
+                    ),
+                    Div(
+                        Div(
+                            H4("🤖 AI-Powered", cls="h5"),
+                            P("Powered by Google Gemini AI for accurate text recognition"),
+                            cls="text-center p-3"
+                        ),
+                        cls="col-md-4 mb-3"
+                    ),
+                    cls="row"
                 ),
-                Script(src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"),
-                Script("""
-                    document.querySelector('form').addEventListener('submit', function(e) {
-                        e.preventDefault();
-                        const formData = new FormData(this);
-                        const resultDiv = document.getElementById('result');
-                        
-                        resultDiv.innerHTML = '<div class="text-center"><div class="spinner-border" role="status"><span class="visually-hidden">Processing...</span></div><p class="mt-2">Processing your file...</p></div>';
-                        
-                        fetch('/upload', {
-                            method: 'POST',
-                            body: formData
-                        })
-                        .then(response => response.json())
-                        .then(data => {
-                            if (data.success) {
-                                resultDiv.innerHTML = `
-                                    <div class="alert alert-success">
-                                        <h5>Extracted Text:</h5>
-                                        <div class="bg-light p-3 rounded" style="max-height: 400px; overflow-y: auto;">
-                                            <pre style="white-space: pre-wrap; font-family: inherit;">${data.text}</pre>
-                                        </div>
-                                    </div>
-                                `;
-                            } else {
-                                resultDiv.innerHTML = `
-                                    <div class="alert alert-danger">
-                                        <h5>Error:</h5>
-                                        <p>${data.error}</p>
-                                    </div>
-                                `;
-                            }
-                        })
-                        .catch(error => {
-                            resultDiv.innerHTML = `
-                                <div class="alert alert-danger">
-                                    <h5>Error:</h5>
-                                    <p>An error occurred while processing the file.</p>
-                                </div>
-                            `;
-                        });
-                    });
-                """)
+                cls="mt-5"
+            ),
+            
+            # Footer
+            Div(
+                Hr(),
+                P("Built with FastHTML and Google Gemini AI", cls="text-center text-muted small"),
+                cls="mt-5"
             )
-        )
+        ),
+        # Custom CSS for better styling
+        Style("""
+            body {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            }
+            .container {
+                background: rgba(255, 255, 255, 0.95);
+                border-radius: 15px;
+                box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+                margin-top: 2rem;
+                margin-bottom: 2rem;
+                padding: 2rem;
+            }
+            .card {
+                border-radius: 12px;
+                transition: transform 0.3s ease;
+            }
+            .card:hover {
+                transform: translateY(-5px);
+            }
+            .btn-primary {
+                background: linear-gradient(45deg, #667eea, #764ba2);
+                border: none;
+                border-radius: 8px;
+                padding: 12px 30px;
+                font-weight: 600;
+                transition: all 0.3s ease;
+            }
+            .btn-primary:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+            }
+            .form-control {
+                border-radius: 8px;
+                border: 2px solid #e9ecef;
+                padding: 12px 15px;
+                transition: all 0.3s ease;
+            }
+            .form-control:focus {
+                border-color: #667eea;
+                box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+            }
+            .alert {
+                border-radius: 10px;
+                border: none;
+                box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            }
+            .spinner-border {
+                width: 3rem;
+                height: 3rem;
+                border-width: 0.3em;
+            }
+            .feature-card {
+                background: #f8f9fa;
+                border-radius: 10px;
+                transition: all 0.3s ease;
+                border: 1px solid #e9ecef;
+            }
+            .feature-card:hover {
+                background: #e9ecef;
+                transform: translateY(-3px);
+            }
+            h1 {
+                background: linear-gradient(45deg, #667eea, #764ba2);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+                font-weight: 700;
+            }
+            .lead {
+                font-size: 1.1rem;
+                font-weight: 400;
+            }
+            .result-text {
+                background: #f8f9fa;
+                border: 1px solid #e9ecef;
+                border-radius: 8px;
+                padding: 20px;
+                max-height: 500px;
+                overflow-y: auto;
+                font-family: 'Courier New', monospace;
+                line-height: 1.6;
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }
+            .file-info {
+                background: #e3f2fd;
+                border-left: 4px solid #2196f3;
+                padding: 15px;
+                margin-bottom: 20px;
+                border-radius: 0 8px 8px 0;
+            }
+        """),
+        # Enhanced JavaScript
+        Script("""
+            document.querySelector('form').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const formData = new FormData(this);
+                const resultDiv = document.getElementById('result');
+                const fileInput = document.getElementById('fileInput');
+                const submitBtn = document.querySelector('button[type="submit"]');
+                
+                // Show loading state
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '⏳ Processing...';
+                
+                resultDiv.innerHTML = `
+                    <div class="text-center">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Processing...</span>
+                        </div>
+                        <p class="mt-3 text-muted">Analyzing your file with AI...</p>
+                    </div>
+                `;
+                
+                fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        const fileName = fileInput.files[0]?.name || 'Unknown file';
+                        resultDiv.innerHTML = `
+                            <div class="alert alert-success">
+                                <div class="file-info">
+                                    <h5 class="mb-2">✅ Text Extraction Complete</h5>
+                                    <p class="mb-0"><strong>File:</strong> ${fileName}</p>
+                                </div>
+                                <h5 class="mb-3">📝 Extracted Text:</h5>
+                                <div class="result-text">${data.text}</div>
+                                <div class="mt-3">
+                                    <button class="btn btn-outline-primary btn-sm" onclick="copyToClipboard()">
+                                        📋 Copy Text
+                                    </button>
+                                    <button class="btn btn-outline-secondary btn-sm ms-2" onclick="downloadText()">
+                                        💾 Download
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        resultDiv.innerHTML = `
+                            <div class="alert alert-danger">
+                                <h5>❌ Error</h5>
+                                <p>${data.error}</p>
+                            </div>
+                        `;
+                    }
+                })
+                .catch(error => {
+                    resultDiv.innerHTML = `
+                        <div class="alert alert-danger">
+                            <h5>❌ Error</h5>
+                            <p>An error occurred while processing the file. Please try again.</p>
+                        </div>
+                    `;
+                })
+                .finally(() => {
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '🚀 Extract Text';
+                });
+            });
+            
+            function copyToClipboard() {
+                const text = document.querySelector('.result-text').textContent;
+                navigator.clipboard.writeText(text).then(() => {
+                    const btn = event.target;
+                    const originalText = btn.innerHTML;
+                    btn.innerHTML = '✅ Copied!';
+                    btn.classList.add('btn-success');
+                    btn.classList.remove('btn-outline-primary');
+                    setTimeout(() => {
+                        btn.innerHTML = originalText;
+                        btn.classList.remove('btn-success');
+                        btn.classList.add('btn-outline-primary');
+                    }, 2000);
+                });
+            }
+            
+            function downloadText() {
+                const text = document.querySelector('.result-text').textContent;
+                const blob = new Blob([text], { type: 'text/plain' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'extracted_text.txt';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            }
+        """)
     )
 
 @rt("/upload", methods=["POST"])

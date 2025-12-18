@@ -13,29 +13,60 @@ import json
 # Set the port to 5001 as specified in the FastHTML documentation
 port = 5001
 
-# Initialize Gemini API
-api_key = "AIzaSyDK-0QygkeObRJJI83zllIJo8Ca3J4Vwm4"
+# Initialize Gemini API (allow override by environment while keeping current default)
+api_key = os.getenv("GOOGLE_API_KEY", "AIzaSyC3l0hg2vWeY0wCRcpqxtCm4xrsouxFcVI")
 os.environ["GOOGLE_API_KEY"] = api_key
 
 # Initialize the Gemini client
 client = genai.Client(api_key=api_key)
 
-# LINE Bot configuration
-LINE_CHANNEL_ACCESS_TOKEN = "XVccgZwoUfD88aXBfeEGNf0Mq0kHii4a/aQP3XTXjwDm2hksTnH1hyelE/DdJdg+tU15+hAnAl13bYpjcdv0Sz2jZYQBmYQofw4ldp2reZ1WoUimsGm4VpnFgPUqMgMF49Us722E0XDIbB/I5lvIxQdB04t89/1O/w1cDnyilFU="
+# LINE Bot configuration (allow override by environment while keeping current default)
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv(
+    "LINE_CHANNEL_ACCESS_TOKEN",
+    "XVccgZwoUfD88aXBfeEGNf0Mq0kHii4a/aQP3XTXjwDm2hksTnH1hyelE/DdJdg+tU15+hAnAl13bYpjcdv0Sz2jZYQBmYQofw4ldp2reZ1WoUimsGm4VpnFgPUqMgMF49Us722E0XDIbB/I5lvIxQdB04t89/1O/w1cDnyilFU="
+)
 LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
 LINE_CONTENT_URL = "https://api-data.line.me/v2/bot/message/{messageId}/content"
 
-def extract_text_from_image(image_data):
-    """Extract text from image using Gemini Vision API"""
+
+def _detect_mime_from_bytes(image_bytes: bytes) -> str:
+    """Best-effort MIME detection from image bytes using PIL; defaults to image/jpeg."""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as im:
+            fmt = (im.format or "").upper()
+        mapping = {
+            "JPEG": "image/jpeg",
+            "JPG": "image/jpeg",
+            "PNG": "image/png",
+            "GIF": "image/gif",
+            "BMP": "image/bmp",
+            "WEBP": "image/webp",
+            "TIFF": "image/tiff",
+            "ICO": "image/x-icon",
+            "HEIC": "image/heic",
+            "HEIF": "image/heif",
+        }
+        return mapping.get(fmt, "image/jpeg")
+    except Exception:
+        return "image/jpeg"
+
+def extract_text_from_image(image_data, mime_type: str | None = None):
+    """Extract text from image using Gemini Vision API.
+
+    image_data can be raw bytes or base64 string. If bytes and mime_type
+    is not provided, attempt to detect it.
+    """
     try:
         # Create the prompt for OCR
         prompt = "Extract all text from this image. Return only the text content, no additional formatting or explanations."
         
-        # Convert image data to base64 for proper API format
+        # Convert image data to base64 for proper API format and determine MIME
         if isinstance(image_data, bytes):
             image_base64 = base64.b64encode(image_data).decode('utf-8')
+            mime = mime_type or _detect_mime_from_bytes(image_data)
         else:
             image_base64 = image_data
+            mime = mime_type or "image/jpeg"
         
         # Use Gemini to extract text with proper content format
         response = client.models.generate_content(
@@ -47,7 +78,7 @@ def extract_text_from_image(image_data):
                         {"text": prompt},
                         {
                             "inline_data": {
-                                "mime_type": "image/jpeg",
+                                "mime_type": mime,
                                 "data": image_base64
                             }
                         }
@@ -82,8 +113,8 @@ def extract_text_from_pdf(pdf_data):
                 # Convert to base64 for Gemini
                 img_base64 = base64.b64encode(img_data).decode('utf-8')
                 
-                # Use Gemini for OCR
-                ocr_text = extract_text_from_image(img_base64)
+                # Use Gemini for OCR (explicit PNG)
+                ocr_text = extract_text_from_image(img_base64, mime_type="image/png")
                 extracted_text += f"\n--- Page {page_num + 1} (OCR) ---\n{ocr_text}\n"
         
         pdf_document.close()
@@ -146,9 +177,11 @@ async def reply_to_line_message(reply_token: str, messages: list):
             "messages": messages
         }
         
-        print(f"LINE API Request:")
+        print("LINE API Request:")
         print(f"  URL: {LINE_REPLY_URL}")
-        print(f"  Headers: {headers}")
+        # Avoid logging secret token
+        safe_headers = {**headers, 'Authorization': 'Bearer ***redacted***'}
+        print(f"  Headers: {safe_headers}")
         print(f"  Payload: {json.dumps(data, indent=2)}")
         
         async with httpx.AsyncClient() as client:

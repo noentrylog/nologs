@@ -983,7 +983,6 @@ async def webhook(req: Request):
                             "text": "🔍 Computation based on your image:"
                         },
                     ] + [{"type": "text", "text": c} for c in chunks]
-                    ]
         
         elif message_type == 'text':
             print("Processing text message...")

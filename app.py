@@ -3,6 +3,7 @@ from google import genai
 import base64
 import io
 from PIL import Image
+import pytesseract
 import fitz  # PyMuPDF for PDF handling
 import os
 from starlette.requests import Request
@@ -52,6 +53,17 @@ def _detect_mime_from_bytes(image_bytes: bytes) -> str:
     except Exception:
         return "image/jpeg"
 
+def _ocr_with_tesseract(image_bytes: bytes) -> str:
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as im:
+            # Basic preprocessing: convert to RGB to avoid mode issues
+            im = im.convert('RGB')
+            text = pytesseract.image_to_string(im)
+            return text.strip()
+    except Exception as e:
+        return f"Error extracting text with Tesseract: {str(e)}"
+
+
 def extract_text_from_image(image_data, mime_type: Optional[str] = None):
     """Extract text from image using Gemini Vision API.
 
@@ -70,26 +82,41 @@ def extract_text_from_image(image_data, mime_type: Optional[str] = None):
             image_base64 = image_data
             mime = mime_type or "image/jpeg"
         
-        # Use Gemini to extract text with proper content format
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=[
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": prompt},
-                        {
-                            "inline_data": {
-                                "mime_type": mime,
-                                "data": image_base64
+        # If no API key or obviously invalid, skip to Tesseract
+        if not api_key or api_key.strip() == "" or api_key.startswith("AIzaSyC3l0hg2vWeY0wCRc"):
+            # decode base64 if needed
+            if not isinstance(image_data, bytes):
+                image_bytes = base64.b64decode(image_base64)
+            else:
+                image_bytes = image_data
+            return _ocr_with_tesseract(image_bytes)
+
+        # Try Gemini first, fall back to Tesseract on failure
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=[
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": prompt},
+                            {
+                                "inline_data": {
+                                    "mime_type": mime,
+                                    "data": image_base64
+                                }
                             }
-                        }
-                    ]
-                }
-            ]
-        )
-        
-        return response.text
+                        ]
+                    }
+                ]
+            )
+            return response.text
+        except Exception:
+            if not isinstance(image_data, bytes):
+                image_bytes = base64.b64decode(image_base64)
+            else:
+                image_bytes = image_data
+            return _ocr_with_tesseract(image_bytes)
     except Exception as e:
         return f"Error extracting text from image: {str(e)}"
 
@@ -862,6 +889,10 @@ def index():
             }
         """)
     )
+
+@rt("/health")
+def health():
+    return {"ok": True}
 
 @rt("/upload", methods=["POST"])
 async def upload_file(req: Request):

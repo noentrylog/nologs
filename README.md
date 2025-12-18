@@ -11,6 +11,10 @@ A web application that uses Google Gemini AI to extract text from uploaded image
 - Copy and download buttons for both the OCR text and the calculation report
 - Docker support with Debian base image
 
+### OCR without Gemini (free / offline)
+
+If a free Gemini key can’t make requests, the app automatically falls back to local OCR using Tesseract. The Docker image installs `tesseract-ocr`, and the code tries Gemini first and then Tesseract. You can run fully offline for OCR (arithmetic parsing still works the same).
+
 ## Quick Test
 
 Try the following text (make it into an image or send as text to the LINE bot):

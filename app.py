@@ -9,12 +9,14 @@ from starlette.requests import Request
 from starlette.datastructures import UploadFile
 import httpx
 import json
+import re
+from typing import Optional, Tuple
 
 # Set the port to 5001 as specified in the FastHTML documentation
 port = 5001
 
 # Initialize Gemini API (allow override by environment while keeping current default)
-api_key = os.getenv("GOOGLE_API_KEY", "AIzaSyC3l0hg2vWeY0wCRcpqxtCm4xrsouxFcVI")
+api_key = os.getenv("GOOGLE_API_KEY", "AIzaSyAAfy_NT9EmLjzUn1s053Y8zzSTzF6LZ6c")
 os.environ["GOOGLE_API_KEY"] = api_key
 
 # Initialize the Gemini client
@@ -50,7 +52,7 @@ def _detect_mime_from_bytes(image_bytes: bytes) -> str:
     except Exception:
         return "image/jpeg"
 
-def extract_text_from_image(image_data, mime_type: str | None = None):
+def extract_text_from_image(image_data, mime_type: Optional[str] = None):
     """Extract text from image using Gemini Vision API.
 
     image_data can be raw bytes or base64 string. If bytes and mime_type
@@ -135,6 +137,361 @@ def process_uploaded_file(file_data, filename):
         return extract_text_from_pdf(file_data)
     else:
         return f"Unsupported file type: {file_extension}. Please upload an image (jpg, png, gif, bmp, webp) or PDF file."
+
+
+# ========================= Arithmetic Interpretation Engine ========================= #
+
+FULL_TOP_BOTTOM_HEADLINES = {
+    "บนล่าง", "บล", "บ/ล", "บน+ล่าง", "บ+ล", "บ-ล", "บน-ล่าง", "ล่างบน"
+}
+SINGLE_HEADLINES = {"บน", "ล่าง"}
+
+
+def _normalize(s: str) -> str:
+    return s.strip()
+
+
+def _is_headline(line: str) -> Tuple[bool, str]:
+    t = _normalize(line)
+    if t in FULL_TOP_BOTTOM_HEADLINES:
+        return True, t
+    if t in SINGLE_HEADLINES:
+        return True, t
+    return False, ""
+
+
+def _perm_count(num_str: str) -> Tuple[int, str]:
+    # Only 3 or 4 digit numbers are supported by explicit rules
+    digits = list(num_str)
+    n = len(digits)
+    if n not in (3, 4):
+        return 0, f"Unsupported digit length: {n}. Only 3 or 4 allowed by rules."
+    from collections import Counter
+    c = Counter(digits)
+    freqs = sorted(c.values(), reverse=True)
+    if n == 3:
+        if freqs == [3]:
+            return 1, "3-digit: all same → 1 perm"
+        if freqs == [2, 1]:
+            return 3, "3-digit: two same → 3 perms"
+        if freqs == [1, 1, 1]:
+            return 6, "3-digit: all different → 6 perms"
+        return 0, "Unsupported 3-digit pattern"
+    # n == 4
+    if freqs == [4]:
+        return 1, "4-digit: all same → 1 perm"
+    if freqs == [2, 2]:
+        return 6, "4-digit: two pairs → 6 perms"
+    if freqs == [2, 1, 1]:
+        return 12, "4-digit: one pair repeated → 12 perms"
+    if freqs == [1, 1, 1, 1]:
+        return 24, "4-digit: all different → 24 perms"
+    return 0, "Unsupported 4-digit pattern"
+
+
+def _parse_number(s: str) -> int | None:
+    try:
+        return int(s)
+    except Exception:
+        return None
+
+
+def _is_full_top_bottom(headline: str) -> bool:
+    return _normalize(headline) in FULL_TOP_BOTTOM_HEADLINES
+
+
+from typing import Union
+
+
+def _format_currency(x: Union[int, float]) -> str:
+    # Simple formatting; keep as integer if possible
+    if isinstance(x, float) and not x.is_integer():
+        return f"{x}"
+    try:
+        xi = int(x)
+        return str(xi)
+    except Exception:
+        return str(x)
+
+
+def compute_from_text(text: str) -> dict:
+    """Parse OCR text and compute totals strictly per rules.
+    Returns a structure with sections, lines, subtotals, and a grand total.
+    """
+    lines = [l.strip() for l in text.splitlines()]
+    sections = []
+    current = {
+        "headline": "No headline",
+        "lines": [],
+        "subtotal": 0
+    }
+
+    def push_section():
+        nonlocal current
+        if current["lines"]:
+            # finalize subtotal
+            current["subtotal"] = sum(li["final"] for li in current["lines"])
+            sections.append(current)
+        current = {"headline": "No headline", "lines": [], "subtotal": 0}
+
+    for raw in lines:
+        if not raw:
+            continue
+        is_head, head = _is_headline(raw)
+        if is_head:
+            # close previous section
+            push_section()
+            current["headline"] = head
+            continue
+
+        # Determine headline effects
+        full_tb = _is_full_top_bottom(current["headline"])  # both effects
+        # single headlines have no doubling
+
+        detail = {
+            "raw": raw,
+            "rules": [],
+            "final": 0
+        }
+
+        # Detect groups
+        if raw.startswith("{") and "}" in raw and "=" in raw:
+            try:
+                inside = raw[raw.find("{")+1:raw.find("}")]
+                items = [i.strip() for i in inside.split(",") if i.strip()]
+                rhs = raw[raw.find("}")+1:].strip()
+                assert rhs.startswith("="), "Group must have ="
+                rhs = rhs[1:].strip()
+                # Case B: = X × Y
+                if "×" in rhs:
+                    # parse X × Y
+                    parts = [p.strip() for p in rhs.split("×")]
+                    if len(parts) != 2:
+                        raise ValueError("Invalid group multiplier format")
+                    X = _parse_number(parts[0])
+                    Y = _parse_number(parts[1])
+                    if X is None or Y is None:
+                        raise ValueError("Invalid numbers in group multiplier")
+                    total = 0
+                    item_details = []
+                    for it in items:
+                        # Each item computed individually per Format A logic
+                        perm, perm_note = _perm_count(it)
+                        if perm == 0:
+                            raise ValueError(perm_note)
+                        val = perm * Y + X
+                        item_details.append({
+                            "item": it,
+                            "perm": perm,
+                            "note": perm_note,
+                            "calc": f"({perm} × {Y}) + {X} = {val}"
+                        })
+                        total += val
+                    # Headline result doubler applies AFTER calculation
+                    doubled = False
+                    if full_tb:
+                        total *= 2
+                        doubled = True
+                    detail["rules"].append("Group with = X × Y → compute each item individually and sum")
+                    if doubled:
+                        detail["rules"].append("Headline Result Doubler applied (×2 after)")
+                    detail["final"] = total
+                    detail["group_items"] = item_details
+                    current["lines"].append(detail)
+                    continue
+                else:
+                    # Case A or C style of groups without ×: treat as value per item
+                    V = _parse_number(rhs)
+                    if V is None:
+                        raise ValueError("Invalid group explicit value")
+                    group_total = V * len(items)
+                    doubled = False
+                    if full_tb:
+                        # Result doubler AFTER calculation
+                        group_total *= 2
+                        doubled = True
+                    detail["rules"].append("Group with explicit per-item value → value × count")
+                    if doubled:
+                        detail["rules"].append("Headline Result Doubler applied (×2 after)")
+                    detail["final"] = group_total
+                    detail["group_value"] = V
+                    detail["group_count"] = len(items)
+                    current["lines"].append(detail)
+                    continue
+            except Exception as e:
+                detail["rules"].append(f"Error parsing group: {e}")
+                detail["final"] = 0
+                current["lines"].append(detail)
+                continue
+
+        # Non-group: determine format
+        # Identify order of symbols
+        has_eq = "=" in raw
+        has_mul = "×" in raw
+
+        # Helper to clean tokens
+        def tok(s: str) -> str:
+            return s.strip()
+
+        if has_eq and has_mul:
+            # Decide between A (ABC = X × Y) vs C (ABC × Y = B)
+            idx_mul = raw.find("×")
+            idx_eq = raw.find("=")
+            if idx_mul > idx_eq:
+                # Format A: left number, right has X × Y
+                try:
+                    left, rhs = raw.split("=")
+                    left = tok(left)
+                    rhs = tok(rhs)
+                    abc = re.sub(r"\D", "", left)
+                    if not abc:
+                        raise ValueError("No number on left side")
+                    Xs, Ys = [tok(p) for p in rhs.split("×")]
+                    X = _parse_number(Xs)
+                    Y = _parse_number(Ys)
+                    if X is None or Y is None:
+                        raise ValueError("Invalid X or Y")
+                    # Permutations used here
+                    perm, perm_note = _perm_count(abc)
+                    if perm == 0:
+                        raise ValueError(perm_note)
+                    # No multiplier doubler for Format A (rule: only ABC × Y)
+                    val = perm * Y + X
+                    # Headline result doubler AFTER
+                    doubled = False
+                    if full_tb:
+                        val *= 2
+                        doubled = True
+                    detail["rules"].append("Format A: ABC = X × Y → (perms × Y) + X")
+                    detail["rules"].append(perm_note)
+                    if doubled:
+                        detail["rules"].append("Headline Result Doubler applied (×2 after)")
+                    detail["final"] = val
+                except Exception as e:
+                    detail["rules"].append(f"Error Format A: {e}")
+                    detail["final"] = 0
+                current["lines"].append(detail)
+                continue
+            else:
+                # Format C: ABC × Y = B (ignore permutations; compute Y × B); apply multipliers later
+                try:
+                    left, Bs = raw.split("=")
+                    left = tok(left)
+                    Bs = tok(Bs)
+                    # parse left as something like 'ABC × Y'
+                    parts = [tok(p) for p in left.split("×")]
+                    if len(parts) != 2:
+                        raise ValueError("Invalid left side for chained format")
+                    abc = re.sub(r"\D", "", parts[0])
+                    Ys = parts[1]
+                    Y = _parse_number(Ys)
+                    B = _parse_number(Bs)
+                    if Y is None or B is None:
+                        raise ValueError("Invalid Y or B numbers")
+                    # Ignore permutations
+                    val = Y * B
+                    # For chained format, multiplier doubling (Effect 1) does NOT apply.
+                    # Apply result doubler AFTER if full TB
+                    doubled = False
+                    if full_tb:
+                        val *= 2
+                        doubled = True
+                    detail["rules"].append("Format C: ABC × Y = B → ignore permutations; compute Y × B")
+                    if doubled:
+                        detail["rules"].append("Headline Result Doubler applied (×2 after)")
+                    detail["final"] = val
+                except Exception as e:
+                    detail["rules"].append(f"Error Format C: {e}")
+                    detail["final"] = 0
+                current["lines"].append(detail)
+                continue
+
+        if has_mul and not has_eq:
+            # Format B: ABC × Y
+            try:
+                left, Ys = [tok(p) for p in raw.split("×")]
+                abc = re.sub(r"\D", "", left)
+                if not abc:
+                    raise ValueError("No number before ×")
+                Y = _parse_number(Ys)
+                if Y is None:
+                    raise ValueError("Invalid Y")
+                # Apply Multiplier Doubler BEFORE if full TB
+                if full_tb:
+                    Y = Y * 2
+                    detail["rules"].append("Headline Multiplier Doubler applied (Y × 2 before)")
+                perm, perm_note = _perm_count(abc)
+                if perm == 0:
+                    raise ValueError(perm_note)
+                val = perm * Y
+                # Apply Result Doubler AFTER if full TB
+                if full_tb:
+                    val *= 2
+                    detail["rules"].append("Headline Result Doubler applied (×2 after)")
+                detail["rules"].append("Format B: ABC × Y → perms × Y")
+                detail["rules"].append(perm_note)
+                detail["final"] = val
+            except Exception as e:
+                detail["rules"].append(f"Error Format B: {e}")
+                detail["final"] = 0
+            current["lines"].append(detail)
+            continue
+
+        if has_eq and not has_mul:
+            # Flat value: ABC = V
+            try:
+                left, Vs = [tok(p) for p in raw.split("=")]
+                abc = re.sub(r"\D", "", left)
+                V = _parse_number(Vs)
+                if V is None:
+                    raise ValueError("Invalid value after =")
+                val = V
+                special_applied = False
+                # Special: two-digit flat values under full TB → V × 2 (only once)
+                if full_tb and abc and len(abc) == 2:
+                    val = V * 2
+                    special_applied = True
+                    detail["rules"].append("Special: two-digit flat value under บนล่าง/บล → V × 2")
+                # Otherwise, apply result doubler AFTER if full TB
+                elif full_tb:
+                    val *= 2
+                    detail["rules"].append("Headline Result Doubler applied (×2 after)")
+                detail["rules"].append("Flat value: take V as-is (rules may modify)")
+                detail["final"] = val
+            except Exception as e:
+                detail["rules"].append(f"Error Flat value: {e}")
+                detail["final"] = 0
+            current["lines"].append(detail)
+            continue
+
+        # Unrecognized line
+        detail["rules"].append("Unrecognized format; skipped")
+        detail["final"] = 0
+        current["lines"].append(detail)
+
+    # push last section
+    push_section()
+
+    grand_total = sum(sec["subtotal"] for sec in sections)
+
+    # Build a human-readable report
+    report_lines = []
+    for sec in sections:
+        report_lines.append(f"Section: {sec['headline']}")
+        for li in sec["lines"]:
+            report_lines.append(f"- Line: {li['raw']}")
+            for r in li["rules"]:
+                report_lines.append(f"  • {r}")
+            report_lines.append(f"  = {li['final']}")
+        report_lines.append(f"Subtotal: {sec['subtotal']}")
+        report_lines.append("")
+    report_lines.append(f"GRAND TOTAL: {grand_total}")
+
+    return {
+        "sections": sections,
+        "grand_total": grand_total,
+        "report": "\n".join(report_lines)
+    }
 
 async def download_line_image_content(message_id: str):
     """Download image content from LINE API"""
@@ -432,14 +789,19 @@ def index():
                                     <p class="mb-0"><strong>File:</strong> ${fileName}</p>
                                 </div>
                                 <h5 class="mb-3">📝 Extracted Text:</h5>
-                                <div class="result-text">${data.text}</div>
+                                <div id="ocr-text" class="result-text">${data.text}</div>
+                                ${data.calc ? `
+                                <h5 class="mt-4 mb-2">📒 Calculation (per rules):</h5>
+                                <div id="calc-report" class="result-text">${data.calc.replaceAll('\\n','<br/>')}</div>
+                                <div class="mt-2"><strong>Grand Total:</strong> ${data.grand_total}</div>
+                                ` : ''}
                                 <div class="mt-3">
-                                    <button class="btn btn-outline-primary btn-sm" onclick="copyToClipboard()">
-                                        📋 Copy Text
-                                    </button>
-                                    <button class="btn btn-outline-secondary btn-sm ms-2" onclick="downloadText()">
-                                        💾 Download
-                                    </button>
+                                    <button class="btn btn-outline-primary btn-sm" onclick="copyFrom('#ocr-text')">📋 Copy Text</button>
+                                    <button class="btn btn-outline-secondary btn-sm ms-2" onclick="downloadFrom('#ocr-text','extracted_text.txt')">💾 Download</button>
+                                    ${data.calc ? `
+                                    <button class=\"btn btn-outline-primary btn-sm ms-3\" onclick=\"copyFrom('#calc-report')\">📋 Copy Report</button>
+                                    <button class=\"btn btn-outline-secondary btn-sm ms-2\" onclick=\"downloadFrom('#calc-report','calculation_report.txt')\">💾 Download Report</button>
+                                    ` : ''}
                                 </div>
                             </div>
                         `;
@@ -466,8 +828,10 @@ def index():
                 });
             });
             
-            function copyToClipboard() {
-                const text = document.querySelector('.result-text').textContent;
+            function copyFrom(selector) {
+                const el = document.querySelector(selector);
+                if (!el) return;
+                const text = el.textContent;
                 navigator.clipboard.writeText(text).then(() => {
                     const btn = event.target;
                     const originalText = btn.innerHTML;
@@ -481,14 +845,16 @@ def index():
                     }, 2000);
                 });
             }
-            
-            function downloadText() {
-                const text = document.querySelector('.result-text').textContent;
+
+            function downloadFrom(selector, filename) {
+                const el = document.querySelector(selector);
+                if (!el) return;
+                const text = el.textContent;
                 const blob = new Blob([text], { type: 'text/plain' });
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = 'extracted_text.txt';
+                a.download = filename || 'download.txt';
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
@@ -513,10 +879,20 @@ async def upload_file(req: Request):
         if not filename:
             return {"success": False, "error": "No filename provided"}
         
-        # Process the file
+        # Process the file → OCR text
         extracted_text = process_uploaded_file(file_data, filename)
         
-        return {"success": True, "text": extracted_text}
+        # If OCR succeeded (string), attempt arithmetic computation
+        calc = None
+        if isinstance(extracted_text, str) and not extracted_text.startswith("Error"):
+            calc = compute_from_text(extracted_text)
+        
+        return {
+            "success": True,
+            "text": extracted_text,
+            "calc": calc["report"] if calc else None,
+            "grand_total": calc["grand_total"] if calc else None
+        }
         
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -587,15 +963,26 @@ async def webhook(req: Request):
                         }
                     ]
                 else:
+                    # Attempt arithmetic computation on OCR text
+                    calc = compute_from_text(ocr_result)
+                    report = calc.get("report", "")
+                    # LINE message length limit ~5000 chars; split if large
+                    chunks = []
+                    if report:
+                        # include heading and total
+                        full_report = f"Result (OCR)\n{report}"
+                        while full_report:
+                            chunk = full_report[:4800]
+                            chunks.append(chunk)
+                            full_report = full_report[4800:]
+                    else:
+                        chunks.append("No calculable content found. Returning OCR text only.")
                     messages = [
                         {
                             "type": "text",
-                            "text": "🔍 Here's the text I found in your image:"
+                            "text": "🔍 Computation based on your image:"
                         },
-                        {
-                            "type": "text",
-                            "text": ocr_result
-                        }
+                    ] + [{"type": "text", "text": c} for c in chunks]
                     ]
         
         elif message_type == 'text':
@@ -603,16 +990,18 @@ async def webhook(req: Request):
             text_content = message.get('text', '')
             print(f"Text content: {text_content}")
             
-            messages = [
-                {
-                    "type": "text",
-                    "text": "Hello, user"
-                },
-                {
-                    "type": "text",
-                    "text": "May I help you?"
-                }
-            ]
+            # Try to parse and compute directly if text lines appear to match rules
+            calc = compute_from_text(text_content)
+            report = calc.get("report", "") if calc else ""
+            if report:
+                messages = [
+                    {"type": "text", "text": "🧮 Computation:"},
+                    {"type": "text", "text": report[:4800]}
+                ]
+            else:
+                messages = [
+                    {"type": "text", "text": "Send an image or lines to compute."}
+                ]
         
         else:
             print(f"Unsupported message type: {message_type}")
